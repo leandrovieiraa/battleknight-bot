@@ -12,6 +12,6 @@ class WorldMap:
         return self._level
     
     def load_map(self):
-        if int(self._level) > 1 and int(self._level) < 5:
+        if int(self._level) > 1 and int(self._level) < 10: # FIXME -> Change to 5
             logging.info(f'Selecionado a região de "Tarant" para o level ({self._level}) do personagem')
             return ['BanditLair', 'StoneCircle', 'Coast', 'Cave']

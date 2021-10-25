@@ -1,8 +1,11 @@
-import requests, logging, random
+import logging, random, time
 from lxml import html
+from tqdm import trange
 from requests.sessions import Session
 from models.character import Character
 from models.worldmap import WorldMap
+from models.payment import Payment
+
 
 class Jobs:
 
@@ -36,6 +39,7 @@ class Jobs:
         tree = html.fromstring(r.content)
 
         character_lvl = tree.xpath('//*[@id="userLevel"]/span/text()')
+        character_silver = tree.xpath('//*[@id="silverCount"]/text()')
 
         character_base_str = tree.xpath('//*[@id="attrBaseStrength"]/text()')
         character_item_str = tree.xpath('//*[@id="attrItemStrength"]/text()')
@@ -67,6 +71,7 @@ class Jobs:
         if character_base_str:
             attributes = f"Carregando atributos:\n\
             Level: {character_lvl[0].strip()}\n\
+            Prata: {character_silver[0].strip()}\n\
             Força: {character_base_str[0].strip()} {character_item_str[0].strip()}\n\
             Aptidão: {character_base_dex[0].strip()} {character_item_dex[0].strip()}\n\
             Constituição: {character_base_end[0].strip()} {character_item_end[0].strip()}\n\
@@ -81,7 +86,10 @@ class Jobs:
             Possibilidade de Defesa: {character_defensive[0].strip()}".replace('    ', '')
             logging.info(attributes)
         
-        char = Character(level=int(character_lvl[0].strip()))
+        char = Character(
+            level=int(character_lvl[0].strip()),
+            silver=int(character_silver[0].strip())
+        )
         return char
 
 
@@ -92,12 +100,17 @@ class Jobs:
         r = rsession.get(f'{server_url}/{endpoint}', headers=self.headers())
         tree = html.fromstring(r.content)
 
+        work_payment = tree.xpath('//*[@id="encashLink"]/span')
+        if work_payment:
+            Payment.get_reward(rsession, server_url, character)
+
         progress_bar = tree.xpath('//*[@id="progressbarEnds"]/span/text()')
         if progress_bar:
             logging.info(f'O jogador deverá esperar para iniciar uma missão, tempo restante: {progress_bar[0].strip()}')
             return
-        
+
         mapbase = tree.xpath('//*[@id="mapBase"]')
+
         if mapbase:
             worldmap = WorldMap(character.level)
             worldmap_objs = []
@@ -107,12 +120,15 @@ class Jobs:
                     worldmap_objs.append({'obj': region_obj[0], 'name': region})
             
             selected_mission = random.choice(worldmap_objs)
-            logging.info(f'Selecionando missão aleatória: {selected_mission["name"]}')
+            mission_type = ['Good', 'Evil']
+            selected_mission_type = random.choice(mission_type)
+
+            logging.info(f'Selecionando missão aleatória no local {selected_mission["name"]} do tipo {selected_mission_type}')
 
             payload = dict()
             payload['chooseMission'] = selected_mission["name"]
             payload['missionArt'] = 'small'
-            payload['missionKarma'] = 'Good'
+            payload['missionKarma'] = selected_mission_type
             payload['buyRubies'] = 0
             
             r = rsession.post(f'{server_url}/{endpoint}', headers=self.headers(), data=payload)
@@ -123,6 +139,51 @@ class Jobs:
                 result = tree.xpath('//*[@id="mainContent"]/div[2]/div[1]/div[2]/div/h1/em/text()')
                 if result:
                     logging.info(f'Resultado do combate: {result[0].strip()}')
+                    
+                    past_silver = character.silver
+                    new_silver = tree.xpath('//*[@id="silverCount"]/text()')[0]
+                    character.silver = int(new_silver)
+                    
+                    logging.info(f'O jogador possuia {past_silver} de prata e agora possui: {character.silver}')
+                    
+                    logging.info(f'Aguardando a missão ser finalizada para continuar')
+                    for _ in trange(150):
+                        time.sleep(1) 
             else:
                 logging.info('O personagem não possui mais pontos de missão, os pontos de missão regeneram-se em 10 por hora')
                 return
+
+
+    @classmethod
+    def go_to_work(self, server_url, endpoint, character):
+        logging.info('O jogador irá realizar um trabalho aleatório')
+        
+        r = rsession.get(f'{server_url}/{endpoint}', headers=self.headers())
+        tree = html.fromstring(r.content)
+
+        progress_bar = tree.xpath('//*[@id="progressbarEnds"]/span/text()')
+        if progress_bar:
+            logging.info(f'O jogador deverá esperar para iniciar um trabalho, tempo restante: {progress_bar[0].strip()}')
+            return
+
+        works = ['good', 'evil', 'natural']
+        timers = [1, 2, 3, 4, 5, 6, 7, 8]
+
+        selected_work = random.choice(works)
+        selected_time = random.choice(timers)
+
+        logging.info(f'Selecionando trabalho e tempo aleatório: {selected_work} - {selected_time * 900}s')
+
+        payload = dict()
+        payload['side'] = selected_work
+        payload['hours'] = selected_time
+        
+        r = rsession.post(f'{server_url}/{endpoint}', headers=self.headers(), data=payload)
+        tree = html.fromstring(r.content)
+
+        logging.info(f'Aguardando o trabalho ser finalizado')
+        for _ in trange(900 * selected_time):
+            time.sleep(1)
+        
+        r = rsession.get(f'{server_url}/{endpoint}', headers=self.headers())
+        Payment.get_reward(rsession, server_url, character)
